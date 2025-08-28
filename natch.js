@@ -1,3 +1,5 @@
+// widget.js
+
 async function loadMatch(container, matchId) {
   const storageKey = `match_${matchId}`;
   const league = container.getAttribute('data-league') || 'eng.1';

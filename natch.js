@@ -1,41 +1,237 @@
 async function loadMatch(container, matchId) {
   const storageKey = `match_${matchId}`;
+  const league = container.getAttribute('data-league') || 'eng.1';
+
+  // Show loading message
+  container.innerHTML = '<div class="loading">Loading match data...</div>';
 
   try {
-    const res = await fetch(`https://love-weld-nine.vercel.app/api/espn?id=${matchId}`);
+    console.log(`Fetching match data for ID: ${matchId} in league: ${league}`);
+    
+    // First try to get specific match data
+    const res = await fetch(`https://love-weld-nine.vercel.app/api/espn?league=${league}&id=${matchId}`);
+    console.log(`API response status: ${res.status}`);
+    
     const data = await res.json();
+    console.log('API response data:', data);
 
-    if (!data.events?.length) {
-      loadFromStorage("No matches available");
-      return;
+    // Check if we got events data (match-specific response)
+    if (data.events?.length) {
+      const match = data.events.find(e => e.id === matchId);
+      if (match) {
+        console.log('Found specific match in events:', match.name);
+        localStorage.setItem(storageKey, JSON.stringify(match));
+        displayMatch(match);
+        return;
+      }
     }
 
-    const match = data.events.find(e => e.id === matchId);
-
-    if (!match) {
-      loadFromStorage("No match found for the provided match ID");
-      return;
+    // If no specific match found, try getting all league events
+    console.log('Match not found with ID parameter, trying league-wide search...');
+    const res2 = await fetch(`https://love-weld-nine.vercel.app/api/espn?league=${league}`);
+    const data2 = await res2.json();
+    
+    if (data2.events?.length) {
+      const match = data2.events.find(e => e.id === matchId);
+      if (match) {
+        console.log('Found match in league events:', match.name);
+        localStorage.setItem(storageKey, JSON.stringify(match));
+        displayMatch(match);
+        return;
+      }
     }
 
-    localStorage.setItem(storageKey, JSON.stringify(match));
-    displayMatch(match);
+    console.log(`Match ID ${matchId} not found. Available match IDs:`, data2.events?.map(e => e.id).slice(0, 10) || []);
+    loadFromStorage("No match found for the provided match ID");
 
     if (match.status?.type?.state === "in") {
       setTimeout(() => loadMatch(container, matchId), 30000);
     }
   } catch (err) {
-    console.error(err);
-    loadFromStorage("❌ Failed to load match data");
+    console.error('Match loading error:', err);
+    loadFromStorage("❌ Failed to load match data - API Error");
   }
 
   function loadFromStorage(fallbackMsg) {
     const stored = localStorage.getItem(storageKey);
     if (stored) {
-      const match = JSON.parse(stored);
-      displayMatch(match, true);
+      const data = JSON.parse(stored);
+      if (data.boxscore) {
+        displayMatchBoxscore(data, true);
+      } else {
+        displayMatch(data, true);
+      }
     } else {
       container.innerHTML = fallbackMsg;
     }
+  }
+
+  function displayMatchBoxscore(data, fromStorage = false) {
+    const boxscore = data.boxscore;
+    const gameInfo = data.gameInfo || {};
+    
+    // Get team data from boxscore
+    const teams = boxscore.teams || [];
+    if (teams.length < 2) {
+      container.innerHTML = 'Incomplete match data';
+      return;
+    }
+
+    const homeTeam = teams.find(t => t.homeAway === 'home') || teams[0];
+    const awayTeam = teams.find(t => t.homeAway === 'away') || teams[1];
+    
+    const homeName = homeTeam?.team?.displayName || "Home Team";
+    const awayName = awayTeam?.team?.displayName || "Away Team";
+    const homeLogo = homeTeam?.team?.logo || "https://via.placeholder.com/75";
+    const awayLogo = awayTeam?.team?.logo || "https://via.placeholder.com/75";
+    
+    // Get scores
+    const homeScore = homeTeam?.score || "0";
+    const awayScore = awayTeam?.score || "0";
+    
+    // Match status
+    const status = gameInfo.status || {};
+    const isLive = status.type?.state === "in";
+    const isComplete = status.type?.state === "post";
+    const clock = status.displayClock || status.clock || "";
+    
+    const liveButton = isLive
+      ? '<span class="live-btn live">🔴 LIVE</span>'
+      : isComplete
+      ? '<span class="live-btn final">✅ FULL TIME</span>'
+      : '<span class="live-btn scheduled">⏰ SCHEDULED</span>';
+
+    // Get form data
+    const homeForm = boxscore.form?.find(f => f.team.id === homeTeam.team.id);
+    const awayForm = boxscore.form?.find(f => f.team.id === awayTeam.team.id);
+    
+    const homeFormDisplay = homeForm?.events?.slice(0, 5).map(e => 
+      `<span class="form-letter ${e.gameResult === "W" ? "win" : e.gameResult === "D" ? "draw" : "loss"}">${e.gameResult}</span>`
+    ).join("") || "";
+    
+    const awayFormDisplay = awayForm?.events?.slice(0, 5).map(e => 
+      `<span class="form-letter ${e.gameResult === "W" ? "win" : e.gameResult === "D" ? "draw" : "loss"}">${e.gameResult}</span>`
+    ).join("") || "";
+
+    // Venue and other info
+    const venue = gameInfo.venue?.fullName || "TBD";
+    const venueCapacity = gameInfo.venue?.capacity || "Unknown";
+    const attendance = gameInfo.attendance || "TBD";
+    const kickoff = gameInfo.date ? new Date(gameInfo.date).toLocaleString("en-GB", {
+      timeZone: "Europe/Paris",
+      dateStyle: "short",
+      timeStyle: "short"
+    }) : "TBD";
+
+    container.innerHTML = `
+      <div class="match-widget">
+        <div class="header">
+          <h2>⚽ ${homeName} vs ${awayName}</h2>
+          <div class="league-info">Premier League 2024-25</div>
+          ${fromStorage ? '<p style="color:orange;font-size:12px">(cached data)</p>' : ""}
+        </div>
+        
+        <div class="adsense">
+          <script async src="https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js?client=ca-pub-2485970459707316" crossorigin="anonymous"></script>
+          <ins class="adsbygoogle"
+               style="display:block"
+               data-ad-client="ca-pub-2485970459707316"
+               data-ad-slot="2737166010"
+               data-ad-format="auto"
+               data-full-width-responsive="true"></ins>
+          <script>(adsbygoogle = window.adsbygoogle || []).push({});</script>
+        </div>
+
+        <div class="teams-section">
+          <div class="logos-row">
+            <img src="${homeLogo}" alt="${homeName}" class="team-logo">
+            <div class="vs-text">
+              ${isLive || isComplete ? "FINAL" : "VS"}
+              ${isLive || isComplete ? 
+                `<div class="score-row">
+                  <span class="score">${homeScore}</span>
+                  <span class="score-separator"> - </span>
+                  <span class="score">${awayScore}</span>
+                </div>` : ""
+              }
+            </div>
+            <img src="${awayLogo}" alt="${awayName}" class="team-logo">
+          </div>
+          <div class="names-row">
+            <div class="team-name">${homeName}</div>
+            <div class="vs-spacer"></div>
+            <div class="team-name">${awayName}</div>
+          </div>
+          <div class="live-info">
+            ${!isLive && !isComplete ? `<p><strong>📅 ${kickoff}</strong></p>` : ""}
+            <p>${liveButton} ${clock ? `- ${clock}` : ""}</p>
+            <p><strong>🏟️ ${venue}</strong>${venueCapacity !== "Unknown" ? ` (${venueCapacity})` : ""}</p>
+            <p><strong>👥 Attendance:</strong> ${attendance}</p>
+          </div>
+        </div>
+
+        <div class="info-grid">
+          <div class="info-card">
+            <h3>📊 Recent Form</h3>
+            <div class="stat-item">
+              <span class="stat-label">${homeName} Form</span>
+              <span class="stat-value">${homeFormDisplay || "N/A"}</span>
+            </div>
+            <div class="stat-item">
+              <span class="stat-label">${awayName} Form</span>
+              <span class="stat-value">${awayFormDisplay || "N/A"}</span>
+            </div>
+            ${homeTeam.statistics ? homeTeam.statistics.slice(0, 5).map(stat =>
+              `<div class="stat-item">
+                <span class="stat-label">${stat.label}</span>
+                <span class="stat-value">${stat.displayValue}</span>
+              </div>`
+            ).join("") : "<p>No statistics available</p>"}
+          </div>
+          
+          <div class="info-card">
+            <h3>💰 Betting Odds</h3>
+            <div class="odds-grid">
+              <div class="odds-card"><h4>Home Win</h4><div class="odds-value">-</div></div>
+              <div class="odds-card"><h4>Draw</h4><div class="odds-value">-</div></div>
+              <div class="odds-card"><h4>Away Win</h4><div class="odds-value">-</div></div>
+              <div class="odds-card"><h4>Over 2.5</h4><div class="odds-value">-</div></div>
+              <div class="odds-card"><h4>Under 2.5</h4><div class="odds-value">-</div></div>
+            </div>
+          </div>
+          
+          <div class="info-card">
+            <h3>⚽ Match Events</h3>
+            <div class="events-list">
+              <p>Match events will appear here during live matches</p>
+            </div>
+          </div>
+          
+          <div class="info-card">
+            <h3>🎫 Match Information</h3>
+            <div class="stat-item">
+              <span class="stat-label">Competition</span>
+              <span class="stat-value">Premier League</span>
+            </div>
+            <div class="stat-item">
+              <span class="stat-label">Venue Capacity</span>
+              <span class="stat-value">${venueCapacity}</span>
+            </div>
+          </div>
+        </div>
+
+        <div class="adsense">
+          <script async src="https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js?client=ca-pub-2485970459707316" crossorigin="anonymous"></script>
+          <ins class="adsbygoogle"
+               style="display:block; text-align:center;"
+               data-ad-layout="in-article"
+               data-ad-format="fluid"
+               data-ad-client="ca-pub-2485970459707316"
+               data-ad-slot="3657034432"></ins>
+          <script>(adsbygoogle = window.adsbygoogle || []).push({});</script>
+        </div>
+      </div>
+    `;
   }
 
   function displayMatch(match, fromStorage = false) {
@@ -148,6 +344,100 @@ async function loadMatch(container, matchId) {
           <h2>⚽ ${homeName} vs ${awayName}</h2>
           <div class="league-info">${season}</div>
           ${fromStorage ? '<p style="color:orange;font-size:12px">(cached data)</p>' : ""}
+        </div>
+        <div class="adsense"><p><script async="async" src="https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js?client=ca-pub-2485970459707316" crossorigin="anonymous" ></script>
+<!-- Advertisement -->
+<ins class="adsbygoogle"
+     style="display:block"
+     data-ad-client="ca-pub-2485970459707316"
+     data-ad-slot="2737166010"
+     data-ad-format="auto"
+     data-full-width-responsive="true"></ins>
+<script>
+     (adsbygoogle = window.adsbygoogle || []).push({});
+</script></p></div>
+        <div class="teams-section">
+          <div class="logos-row">
+            <img src="${home?.team?.logo ||
+              "https://via.placeholder.com/75"}" alt="${homeName}" class="team-logo">
+            <div class="vs-text">
+              ${isLive || isComplete ? "FINAL" : "VS"}
+              ${
+                isLive || isComplete
+                  ? `<div class="score-row"><span class="score">${home?.score ||
+                      "0"}</span><span class="score-separator"> - </span><span class="score">${away?.score ||
+                      "0"}</span></div>`
+                  : ""
+              }
+            </div>
+            <img src="${away?.team?.logo ||
+              "https://via.placeholder.com/75"}" alt="${awayName}" class="team-logo">
+          </div>
+          <div class="names-row">
+            <div class="team-name">${homeName}</div>
+            <div class="vs-spacer"></div>
+            <div class="team-name">${awayName}</div>
+          </div>
+          <div class="live-info">
+            ${!isLive && !isComplete ? `<p><strong>📅 ${kickoff}</strong></p>` : ""}
+            <p>${liveButton} ${clock ? `- ${clock}` : ""}</p>
+            <p><strong>🏟️ ${venue}</strong>${venueCapacity !== "Unknown" ? ` (${venueCapacity})` : ""}</p>
+            <p><strong>👥 Attendance:</strong> ${attendance.toLocaleString ? attendance.toLocaleString() : attendance}</p>
+            <p><strong>📺 ${broadcast}</strong></p>
+          </div>
+        </div>
+        <div class="info-grid">
+          <div class="info-card">
+            <h3>📊 Live Statistics</h3>
+            ${statsHtml || "<p>No live stats available</p>"}
+            <div class="stat-item"><span class="stat-label">Home Form</span><span class="stat-value">${homeForm}</span></div>
+            <div class="stat-item"><span class="stat-label">Away Form</span><span class="stat-value">${awayForm}</span></div>
+            <div class="stat-item"><span class="stat-label">Home Record</span><span class="stat-value">${home?.records?.[0]?.summary || "N/A"}</span></div>
+            <div class="stat-item"><span class="stat-label">Away Record</span><span class="stat-value">${away?.records?.[0]?.summary || "N/A"}</span></div>
+          </div>
+          <div class="info-card">
+            <h3>💰 Betting Odds</h3>
+            <div class="odds-grid">
+              <div class="odds-card"><h4>Home Win</h4><div class="odds-value">${moneyline.home?.close?.odds || "-"}</div></div>
+              <div class="odds-card"><h4>Draw</h4><div class="odds-value">${moneyline.draw?.close?.odds || "-"}</div></div>
+              <div class="odds-card"><h4>Away Win</h4><div class="odds-value">${moneyline.away?.close?.odds || "-"}</div></div>
+              <div class="odds-card"><h4>Over 2.5</h4><div class="odds-value">${overUnder.over?.close?.odds || "-"}</div></div>
+              <div class="odds-card"><h4>Under 2.5</h4><div class="odds-value">${overUnder.under?.close?.odds || "-"}</div></div>
+            </div>
+          </div>
+          <div class="info-card">
+            <h3>⚽ Match Events</h3>
+            <div class="events-list">${eventsHtml}</div>
+          </div>
+          <div class="info-card">
+            <h3>🎫 Match Information</h3>
+            <div class="stat-item"><span class="stat-label">Tickets</span><span class="stat-value">${tickets}</span></div>
+            <div class="stat-item"><span class="stat-label">Weather</span><span class="stat-value">${weather.temperature || "N/A"}${weather.condition ? ` - ${weather.condition}` : ""}</span></div>
+            <div class="stat-item"><span class="stat-label">Referee</span><span class="stat-value">${comp.officials?.[0]?.displayName || "TBD"}</span></div>
+            <div class="stat-item"><span class="stat-label">Competition</span><span class="stat-value">${match.season?.slug?.replace(/-/g, " ") || "League"}</span></div>
+          </div>
+        </div>
+        <div class="adsense"><p><script async="async" src="https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js?client=ca-pub-2485970459707316" crossorigin="anonymous" ></script>
+<ins class="adsbygoogle"
+     style="display:block; text-align:center;"
+     data-ad-layout="in-article"
+     data-ad-format="fluid"
+     data-ad-client="ca-pub-2485970459707316"
+     data-ad-slot="3657034432"></ins>
+<script>
+     (adsbygoogle = window.adsbygoogle || []).push({});
+</script></p></div>
+      </div>
+    `;
+  }
+}
+
+// Auto-init for all containers
+document.querySelectorAll(".match-widget-container").forEach(container => {
+  const matchId = container.getAttribute("data-match-id");
+  loadMatch(container, matchId);
+  setInterval(() => loadMatch(container, matchId), 30000);
+});          ${fromStorage ? '<p style="color:orange;font-size:12px">(cached data)</p>' : ""}
         </div>
         <div class="adsense"><p><script async="async" src="https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js?client=ca-pub-2485970459707316" crossorigin="anonymous" ></script>
 <!-- Advertisement -->

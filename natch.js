@@ -1,115 +1,147 @@
 // widget.js
 
-async function loadMatch(container, matchId) {
+async function loadMatch(container, matchId, eventId = null) {
   const storageKey = `match_${matchId}`;
   const league = container.getAttribute('data-league') || 'eng.1';
 
-  // Show loading message
   container.innerHTML = '<div class="loading">Loading match data...</div>';
 
   try {
     console.log(`Fetching match data for ID: ${matchId} in league: ${league}`);
-    
-    // First try to get specific match data
-    const res = await fetch(`https://love-weld-nine.vercel.app/api/espn?league=${league}&id=${matchId}`);
-    console.log(`API response status: ${res.status}`);
-    
-    const data = await res.json();
-    console.log('API response data:', data);
 
-    // Check if we got events data (match-specific response)
-    if (data.events?.length) {
-      const match = data.events.find(e => e.id === matchId);
-      if (match) {
-        console.log('Found specific match in events:', match.name);
-        localStorage.setItem(storageKey, JSON.stringify(match));
-        displayMatch(match);
-        return;
-      }
+    // Fetch match by ID
+    let res = await fetch(`https://love-weld-nine.vercel.app/api/espn?league=${league}&id=${matchId}`);
+    let data = await res.json();
+
+    // Find match
+    let match = data.events?.find(e => String(e.id) === String(matchId));
+
+    // If not found, fetch league events
+    if (!match) {
+      console.log('Match not found by ID, fetching league events...');
+      res = await fetch(`https://love-weld-nine.vercel.app/api/espn?league=${league}`);
+      data = await res.json();
+      match = data.events?.find(e => String(e.id) === String(matchId));
     }
 
-    // If no specific match found, try getting all league events
-    console.log('Match not found with ID parameter, trying league-wide search...');
-    const res2 = await fetch(`https://love-weld-nine.vercel.app/api/espn?league=${league}`);
-    const data2 = await res2.json();
-    
-    if (data2.events?.length) {
-      const match = data2.events.find(e => e.id === matchId);
-      if (match) {
-        console.log('Found match in league events:', match.name);
-        localStorage.setItem(storageKey, JSON.stringify(match));
-        displayMatch(match);
-        return;
-      }
+    if (!match) {
+      console.log('No match found, trying storage fallback');
+      return loadFromStorage();
     }
 
-    console.log(`Match ID ${matchId} not found. Available match IDs:`, data2.events?.map(e => e.id).slice(0, 10) || []);
-    loadFromStorage("No match found for the provided match ID");
+    // Store in localStorage
+    localStorage.setItem(storageKey, JSON.stringify(match));
+
+    // If eventId is provided, filter match events
+    if (eventId && match.competitions?.[0]?.details?.events?.length) {
+      match.competitions[0].details.events = match.competitions[0].details.events.filter(ev => String(ev.id) === String(eventId));
+    }
+
+    displayMatch(match);
   } catch (err) {
-    console.error('Match loading error:', err);
+    console.error('Error loading match:', err);
     loadFromStorage("❌ Failed to load match data - API Error");
   }
 
-  function loadFromStorage(fallbackMsg) {
+  function loadFromStorage(fallbackMsg = 'No match found') {
     const stored = localStorage.getItem(storageKey);
     if (stored) {
       const data = JSON.parse(stored);
-      if (data.boxscore) {
-        displayMatchBoxscore(data, true);
-      } else {
-        displayMatch(data, true);
-      }
+      displayMatch(data, true);
     } else {
       container.innerHTML = fallbackMsg;
     }
   }
 
-  function displayMatchBoxscore(data, fromStorage = false) {
-    const boxscore = data.boxscore;
-    const gameInfo = data.gameInfo || {};
-    
-    // Get team data from boxscore
-    const teams = boxscore.teams || [];
-    if (teams.length < 2) {
-      container.innerHTML = 'Incomplete match data';
-      return;
-    }
+  function displayMatch(match, fromStorage = false) {
+    const comp = match.competitions?.[0];
+    if (!comp) return container.innerHTML = 'Invalid match data';
 
-    const homeTeam = teams.find(t => t.homeAway === 'home') || teams[0];
-    const awayTeam = teams.find(t => t.homeAway === 'away') || teams[1];
-    
-    const homeName = homeTeam?.team?.displayName || "Home Team";
-    const awayName = awayTeam?.team?.displayName || "Away Team";
-    const homeLogo = homeTeam?.team?.logo || "https://via.placeholder.com/75";
-    const awayLogo = awayTeam?.team?.logo || "https://via.placeholder.com/75";
-    
-    // Get scores
-    const homeScore = homeTeam?.score || "0";
-    const awayScore = awayTeam?.score || "0";
-    
-    // Match status
-    const status = gameInfo.status || {};
-    const isLive = status.type?.state === "in";
-    const isComplete = status.type?.state === "post";
-    const clock = status.displayClock || status.clock || "";
-    
+    const home = comp.competitors?.find(c => c.homeAway === "home");
+    const away = comp.competitors?.find(c => c.homeAway === "away");
+
+    const homeName = home?.team?.name || "Home";
+    const awayName = away?.team?.name || "Away";
+
+    const kickoff = match.date
+      ? new Date(match.date).toLocaleString("en-GB", { timeZone: "Europe/Paris", dateStyle: "short", timeStyle: "short" })
+      : "TBD";
+
+    const isLive = match.status?.type?.state === "in";
+    const isComplete = match.status?.type?.state === "post";
+    const clock = match.status?.displayClock || match.status?.clock || "";
+
     const liveButton = isLive
       ? '<span class="live-btn live">🔴 LIVE</span>'
       : isComplete
       ? '<span class="live-btn final">✅ FULL TIME</span>'
       : '<span class="live-btn scheduled">⏰ SCHEDULED</span>';
 
-    // Get form data
-    const homeForm = boxscore.form?.find(f => f.team.id === homeTeam.team.id);
-    const awayForm = boxscore.form?.find(f => f.team.id === awayTeam.team.id);
-    
-    const homeFormDisplay = homeForm?.events?.slice(0, 5).map(e => 
-      `<span class="form-letter ${e.gameResult === "W" ? "win" : e.gameResult === "D" ? "draw" : "loss"}">${e.gameResult}</span>`
-    ).join("") || "";
-    
-    const awayFormDisplay = awayForm?.events?.slice(0, 5).map(e => 
-      `<span class="form-letter ${e.gameResult === "W" ? "win" : e.gameResult === "D" ? "draw" : "loss"}">${e.gameResult}</span>`
-    ).join("") || "";
+    // Forms
+    const formatForm = form => form?.split("").map(f => `<span class="form-letter ${f==="W"?"win":f==="D"?"draw":"loss"}">${f}</span>`).join("") || "N/A";
+    const homeForm = formatForm(home?.form);
+    const awayForm = formatForm(away?.form);
+
+    // Stats
+    const statsHtml = generateStatsHtml(home?.statistics || [], away?.statistics || []);
+
+    // Events
+    const events = comp.details?.events || [];
+    const eventsHtml = events.length ? events.map(ev => `<div class="event-item"><span class="event-time">${ev.clock || "FT"}</span>${ev.text || ev.description || "Event"}</div>`).join("") : "<p>No match events</p>";
+
+    container.innerHTML = `
+      <div class="match-widget">
+        <div class="header">
+          <h2>⚽ ${homeName} vs ${awayName}</h2>
+          <div class="league-info">${match.season?.year || ""} ${match.season?.slug?.replace(/-/g," ") || ""}</div>
+          ${fromStorage ? '<p style="color:orange;font-size:12px">(cached)</p>' : ""}
+        </div>
+        <div class="teams-section">
+          <div class="logos-row">
+            <img src="${home?.team?.logo || 'https://via.placeholder.com/75'}" alt="${homeName}" class="team-logo">
+            <div class="vs-text">
+              ${isLive || isComplete ? "FINAL" : "VS"}
+              ${isLive || isComplete ? `<div class="score-row"><span class="score">${home?.score || 0}</span> - <span class="score">${away?.score || 0}</span></div>` : ""}
+            </div>
+            <img src="${away?.team?.logo || 'https://via.placeholder.com/75'}" alt="${awayName}" class="team-logo">
+          </div>
+          <div class="names-row"><div class="team-name">${homeName}</div><div class="vs-spacer"></div><div class="team-name">${awayName}</div></div>
+          <div class="live-info">
+            ${!isLive && !isComplete ? `<p>📅 ${kickoff}</p>` : ""}
+            <p>${liveButton} ${clock ? `- ${clock}` : ""}</p>
+          </div>
+        </div>
+        <div class="info-grid">
+          <div class="info-card"><h3>📊 Live Statistics</h3>${statsHtml}<div class="stat-item"><span>Home Form:</span> ${homeForm}</div><div class="stat-item"><span>Away Form:</span> ${awayForm}</div></div>
+          <div class="info-card"><h3>⚽ Match Events</h3><div class="events-list">${eventsHtml}</div></div>
+        </div>
+      </div>
+    `;
+  }
+
+  function generateStatsHtml(homeStats, awayStats) {
+    const statsMap = {};
+    homeStats.forEach(h => {
+      const key = h.name;
+      statsMap[key] = { home: h.displayValue || h.value || "-", away: "-" };
+    });
+    awayStats.forEach(a => {
+      if (!statsMap[a.name]) statsMap[a.name] = { home: "-", away: a.displayValue || a.value || "-" };
+      else statsMap[a.name].away = a.displayValue || a.value || "-";
+    });
+    return Object.entries(statsMap).map(([k,v]) => `<div class="stat-item"><span>${k}</span> <span>${v.home} - ${v.away}</span></div>`).join("");
+  }
+}
+
+// Auto-init + recursive refresh
+document.querySelectorAll(".match-widget-container").forEach(container => {
+  const matchId = container.getAttribute("data-match-id");
+  const eventId = container.getAttribute("data-event-id") || null; // Optional
+  (async function refresh() {
+    await loadMatch(container, matchId, eventId);
+    setTimeout(refresh, 30000);
+  })();
+});    ).join("") || "";
 
     // Venue and other info
     const venue = gameInfo.venue?.fullName || "TBD";

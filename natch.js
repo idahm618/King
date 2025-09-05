@@ -10,7 +10,7 @@ async function loadMatch(container, matchId, eventId = null) {
     console.log(`Fetching match data for ID: ${matchId} in league: ${league}`);
 
     // Fetch match by ID
-    let res = await fetch(`https://love-weld-nine.vercel.app/api/espn?league=${league}&id=${matchId}`);
+    let res = await fetch(`https://api.totalsportslive.co.zw?league=${league}&id=${matchId}`);
     let data = await res.json();
 
     // Find match
